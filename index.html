@@ -6,7 +6,6 @@
 <title>Matrice de Priorités — Équipe</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 
-<!-- 🔥 Firebase SDK -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
@@ -35,6 +34,27 @@
     return 'reporter';
   }
 
+  function formatDate(dateStr) {
+    if (!dateStr) return null;
+    const [y, m, d] = dateStr.split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  function isExpiringSoon(dateStr) {
+    if (!dateStr) return false;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const target = new Date(dateStr); target.setHours(0,0,0,0);
+    const diff = (target - today) / (1000 * 60 * 60 * 24);
+    return diff <= 1 && diff >= 0;
+  }
+
+  function isExpired(dateStr) {
+    if (!dateStr) return false;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const target = new Date(dateStr); target.setHours(0,0,0,0);
+    return target < today;
+  }
+
   window.toggleUrgent = function() {
     urgent = !urgent;
     const btn = document.getElementById('btnUrgent');
@@ -52,27 +72,31 @@
   window.addTask = async function() {
     const input = document.getElementById('taskInput');
     const text = input.value.trim();
+    const owner = document.getElementById('ownerSelect').value;
+    const deadline = document.getElementById('deadlineInput').value;
     if (!text) return;
     input.value = '';
+    document.getElementById('deadlineInput').value = '';
     await addDoc(tasksCol, {
       text,
       quadrant: getQuadrant(urgent, important),
       done: false,
+      owner: owner || null,
+      deadline: deadline || null,
       createdAt: Date.now()
     });
   };
 
-  window.toggleDone = async function(id, current) {
-    await updateDoc(doc(db, "tasks", id), { done: !current });
+  window.confirmDelete = async function(id, taskText) {
+    showConfirmModal(taskText, async () => {
+      await deleteDoc(doc(db, "tasks", id));
+    });
   };
 
-  window.deleteTask = async function(id) {
-    await deleteDoc(doc(db, "tasks", id));
-  };
-
-  window.drag = function(event, id) {
-    draggedId = id;
-    event.dataTransfer.effectAllowed = 'move';
+  window.confirmDone = async function(id, taskText) {
+    showConfirmModal(`Marquer "${taskText}" comme terminée et la supprimer ?`, async () => {
+      await deleteDoc(doc(db, "tasks", id));
+    });
   };
 
   window.drop = async function(event, quadrant) {
@@ -83,18 +107,41 @@
     draggedId = null;
   };
 
+  window.drag = function(event, id) {
+    draggedId = id;
+    event.dataTransfer.effectAllowed = 'move';
+  };
+
+  function showConfirmModal(message, onConfirm) {
+    const modal = document.getElementById('confirmModal');
+    document.getElementById('confirmMessage').textContent = message;
+    modal.classList.add('visible');
+    document.getElementById('confirmYes').onclick = async () => {
+      modal.classList.remove('visible');
+      await onConfirm();
+    };
+    document.getElementById('confirmNo').onclick = () => {
+      modal.classList.remove('visible');
+    };
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('taskInput').addEventListener('keydown', e => {
       if (e.key === 'Enter') window.addTask();
     });
 
-    // Écoute en temps réel Firestore
     onSnapshot(tasksCol, (snapshot) => {
       const tasks = [];
       snapshot.forEach(d => tasks.push({ id: d.id, ...d.data() }));
       render(tasks);
     });
   });
+
+  const OWNER_COLORS = {
+    'Baptiste': '#6366f1',
+    'Nicolas':  '#f59e0b',
+    'Antoine':  '#10b981',
+  };
 
   function render(tasks) {
     const lists = { faire: [], deleguer: [], planifier: [], reporter: [] };
@@ -106,7 +153,7 @@
     for (const [q, items] of Object.entries(lists)) {
       const el = document.getElementById('list-' + q);
       const badge = document.getElementById('count-' + q);
-      badge.textContent = items.filter(t => !t.done).length;
+      badge.textContent = items.length;
 
       if (items.length === 0) {
         el.innerHTML = '<div class="empty-state">Aucune tâche ici</div>';
@@ -121,26 +168,62 @@
         card.ondragstart = e => window.drag(e, t.id);
         card.ondragend = () => document.querySelectorAll('.quadrant').forEach(q => q.classList.remove('drag-over'));
 
+        // Checkbox — clic = confirmation suppression
         const check = document.createElement('div');
-        check.className = 'task-check' + (t.done ? ' done' : '');
-        check.onclick = () => window.toggleDone(t.id, t.done);
+        check.className = 'task-check';
+        check.title = 'Marquer comme terminée';
+        check.onclick = () => window.confirmDone(t.id, t.text);
 
-        const text = document.createElement('div');
-        text.className = 'task-text' + (t.done ? ' done' : '');
-        text.textContent = t.text;
+        // Contenu principal
+        const content = document.createElement('div');
+        content.className = 'task-content';
+
+        const textEl = document.createElement('div');
+        textEl.className = 'task-text';
+        textEl.textContent = t.text;
+        content.appendChild(textEl);
+
+        // Ligne meta (owner + deadline)
+        const meta = document.createElement('div');
+        meta.className = 'task-meta';
+
+        if (t.owner) {
+          const ownerEl = document.createElement('span');
+          ownerEl.className = 'task-owner';
+          ownerEl.textContent = t.owner;
+          ownerEl.style.background = (OWNER_COLORS[t.owner] || '#888') + '22';
+          ownerEl.style.color = OWNER_COLORS[t.owner] || '#888';
+          meta.appendChild(ownerEl);
+        }
+
+        if (t.deadline) {
+          const deadlineEl = document.createElement('span');
+          deadlineEl.className = 'task-deadline';
+          if (isExpired(t.deadline)) {
+            deadlineEl.classList.add('expired');
+            deadlineEl.textContent = '⚠️ ' + formatDate(t.deadline);
+          } else if (isExpiringSoon(t.deadline)) {
+            deadlineEl.classList.add('soon');
+            deadlineEl.textContent = '🔔 ' + formatDate(t.deadline);
+          } else {
+            deadlineEl.textContent = '📅 ' + formatDate(t.deadline);
+          }
+          meta.appendChild(deadlineEl);
+        }
+
+        if (t.owner || t.deadline) content.appendChild(meta);
 
         const del = document.createElement('button');
         del.className = 'task-delete';
         del.textContent = '×';
         del.title = 'Supprimer';
-        del.onclick = e => { e.stopPropagation(); window.deleteTask(t.id); };
+        del.onclick = e => { e.stopPropagation(); window.confirmDelete(t.id, t.text); };
 
-        card.append(check, text, del);
+        card.append(check, content, del);
         el.appendChild(card);
       });
     }
 
-    // Indicateur de connexion
     document.getElementById('sync-status').textContent = '🟢 Synchronisé';
   }
 </script>
@@ -173,17 +256,8 @@
     padding: 24px;
   }
 
-  header {
-    text-align: center;
-    margin-bottom: 8px;
-  }
-
-  header h1 {
-    font-family: 'DM Serif Display', serif;
-    font-size: 2rem;
-    letter-spacing: -0.5px;
-  }
-
+  header { text-align: center; margin-bottom: 8px; }
+  header h1 { font-family: 'DM Serif Display', serif; font-size: 2rem; letter-spacing: -0.5px; }
   header p { color: var(--text-muted); font-size: 0.9rem; margin-top: 6px; }
 
   #sync-status {
@@ -198,9 +272,9 @@
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: 16px;
-    padding: 16px 20px;
+    padding: 14px 20px;
     display: flex;
-    gap: 12px;
+    gap: 10px;
     align-items: center;
     margin-bottom: 28px;
     box-shadow: var(--shadow);
@@ -209,7 +283,7 @@
 
   .add-task-bar input[type="text"] {
     flex: 1;
-    min-width: 200px;
+    min-width: 160px;
     border: none;
     outline: none;
     font-family: 'DM Sans', sans-serif;
@@ -219,6 +293,30 @@
   }
 
   .add-task-bar input::placeholder { color: var(--text-muted); }
+
+  .add-task-bar input[type="date"] {
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    color: var(--text);
+    background: var(--bg);
+    outline: none;
+    cursor: pointer;
+  }
+
+  .owner-select {
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82rem;
+    color: var(--text);
+    background: var(--bg);
+    outline: none;
+    cursor: pointer;
+  }
 
   .toggle-label { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
 
@@ -251,7 +349,6 @@
     transition: opacity 0.15s, transform 0.1s;
     white-space: nowrap;
   }
-
   .add-btn:hover { opacity: 0.85; transform: translateY(-1px); }
 
   .matrix {
@@ -300,21 +397,11 @@
   .quadrant.drag-over { border-color: currentColor; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }
 
   .quadrant-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
-
-  .quadrant-icon {
-    width: 36px; height: 36px;
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.1rem; flex-shrink: 0;
-  }
-
+  .quadrant-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
   .quadrant-name { font-family: 'DM Serif Display', serif; font-size: 1.1rem; line-height: 1.2; }
   .quadrant-tag { font-size: 0.72rem; font-weight: 500; letter-spacing: 0.5px; margin-top: 2px; opacity: 0.7; }
 
-  .quadrant-hint {
-    font-size: 0.75rem; color: var(--text-muted); line-height: 1.4;
-    padding: 8px 12px; border-radius: 10px; background: var(--bg); margin-bottom: 4px;
-  }
+  .quadrant-hint { font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; padding: 8px 12px; border-radius: 10px; background: var(--bg); margin-bottom: 4px; }
   .quadrant-hint em { font-style: italic; }
 
   .q-faire { color: var(--faire); background: linear-gradient(145deg, #fff 60%, var(--faire-light)); }
@@ -334,10 +421,10 @@
     border-radius: 10px;
     padding: 9px 12px;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
     cursor: grab;
-    transition: box-shadow 0.15s, transform 0.15s, opacity 0.15s;
+    transition: box-shadow 0.15s, transform 0.15s;
     animation: slideIn 0.2s ease;
   }
 
@@ -347,40 +434,120 @@
   }
 
   .task-card:active { cursor: grabbing; }
-  .task-card.dragging { opacity: 0.4; transform: scale(0.97); }
   .task-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-1px); }
 
   .task-check {
     width: 18px; height: 18px;
     border-radius: 50%;
     border: 2px solid var(--border);
-    flex-shrink: 0; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    cursor: pointer;
+    margin-top: 2px;
     transition: all 0.15s;
   }
-  .task-check:hover { border-color: currentColor; }
-  .task-check.done { background: currentColor; border-color: currentColor; }
-  .task-check.done::after { content: '✓'; font-size: 0.65rem; color: white; font-weight: 700; }
+  .task-check:hover { border-color: #6bbf8e; background: #e8f5ee; }
 
-  .task-text { flex: 1; font-size: 0.88rem; line-height: 1.3; transition: opacity 0.2s; }
-  .task-text.done { text-decoration: line-through; opacity: 0.45; }
+  .task-content { flex: 1; min-width: 0; }
+
+  .task-text { font-size: 0.88rem; line-height: 1.3; }
+
+  .task-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center; }
+
+  .task-owner {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  .task-deadline {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .task-deadline.soon { color: #f59e0b; font-weight: 600; }
+  .task-deadline.expired { color: #e55; font-weight: 600; }
 
   .task-delete {
-    opacity: 0; background: none; border: none;
-    color: var(--text-muted); font-size: 1rem; cursor: pointer;
-    padding: 2px 4px; border-radius: 6px;
-    transition: opacity 0.15s, color 0.15s; line-height: 1;
+    opacity: 0;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 6px;
+    transition: opacity 0.15s, color 0.15s;
+    line-height: 1;
+    flex-shrink: 0;
   }
   .task-card:hover .task-delete { opacity: 1; }
   .task-delete:hover { color: #e55; }
 
   .empty-state { text-align: center; color: var(--text-muted); font-size: 0.82rem; padding: 20px 0; opacity: 0.6; }
 
-  .count-badge {
-    background: currentColor; color: white;
-    border-radius: 20px; font-size: 0.7rem; font-weight: 700;
-    padding: 1px 7px; margin-left: auto; opacity: 0.85;
+  .count-badge { background: currentColor; color: white; border-radius: 20px; font-size: 0.7rem; font-weight: 700; padding: 1px 7px; margin-left: auto; opacity: 0.85; }
+
+  /* MODAL */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
   }
+  .modal-overlay.visible { display: flex; }
+
+  .modal {
+    background: white;
+    border-radius: 20px;
+    padding: 28px 32px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    animation: modalIn 0.2s ease;
+  }
+
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  .modal h3 { font-family: 'DM Serif Display', serif; font-size: 1.2rem; margin-bottom: 12px; }
+  .modal p { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 24px; line-height: 1.4; }
+
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+  .btn-cancel {
+    border: 1.5px solid var(--border);
+    background: white;
+    border-radius: 10px;
+    padding: 8px 20px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: all 0.15s;
+  }
+  .btn-cancel:hover { background: var(--bg); }
+
+  .btn-confirm {
+    background: #e55;
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 8px 20px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .btn-confirm:hover { opacity: 0.85; }
 
   @media (max-width: 600px) {
     .matrix { grid-template-columns: 1fr; }
@@ -391,6 +558,18 @@
 </head>
 <body>
 
+<!-- MODAL CONFIRMATION -->
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal">
+    <h3>Confirmation</h3>
+    <p id="confirmMessage"></p>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="confirmNo">Annuler</button>
+      <button class="btn-confirm" id="confirmYes">Supprimer ✓</button>
+    </div>
+  </div>
+</div>
+
 <header>
   <h1>Matrice de Priorités</h1>
   <p>Glissez vos tâches entre les quadrants · Cochez pour valider</p>
@@ -399,6 +578,16 @@
 
 <div class="add-task-bar">
   <input type="text" id="taskInput" placeholder="Nouvelle tâche…" />
+
+  <select class="owner-select" id="ownerSelect">
+    <option value="">👤 Responsable</option>
+    <option value="Baptiste">Baptiste</option>
+    <option value="Nicolas">Nicolas</option>
+    <option value="Antoine">Antoine</option>
+  </select>
+
+  <input type="date" id="deadlineInput" title="Faire avant le…" />
+
   <span class="toggle-label">Urgent ?</span>
   <button class="toggle-btn" id="btnUrgent" onclick="toggleUrgent()">Non</button>
   <span class="toggle-label">Important ?</span>
