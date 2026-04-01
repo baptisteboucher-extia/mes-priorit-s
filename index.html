@@ -3,8 +3,148 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Matrice de Priorités</title>
+<title>Matrice de Priorités — Équipe</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<!-- 🔥 Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyByiE0ris5sb4yu1GpU4UVeaCJc4j5OjqG",
+    authDomain: "matrice-de-prio.firebaseapp.com",
+    projectId: "matrice-de-prio",
+    storageBucket: "matrice-de-prio.firebasestorage.app",
+    messagingSenderId: "167746318009",
+    appId: "1:167746318009:web:46c2fa8593dd224f837568"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const tasksCol = collection(db, "tasks");
+
+  let urgent = false;
+  let important = false;
+  let draggedId = null;
+
+  function getQuadrant(u, i) {
+    if (u && i)  return 'faire';
+    if (u && !i) return 'deleguer';
+    if (!u && i) return 'planifier';
+    return 'reporter';
+  }
+
+  window.toggleUrgent = function() {
+    urgent = !urgent;
+    const btn = document.getElementById('btnUrgent');
+    btn.textContent = urgent ? 'Oui' : 'Non';
+    btn.className = 'toggle-btn' + (urgent ? ' active-urgent' : '');
+  };
+
+  window.toggleImportant = function() {
+    important = !important;
+    const btn = document.getElementById('btnImportant');
+    btn.textContent = important ? 'Oui' : 'Non';
+    btn.className = 'toggle-btn' + (important ? ' active-important' : '');
+  };
+
+  window.addTask = async function() {
+    const input = document.getElementById('taskInput');
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    await addDoc(tasksCol, {
+      text,
+      quadrant: getQuadrant(urgent, important),
+      done: false,
+      createdAt: Date.now()
+    });
+  };
+
+  window.toggleDone = async function(id, current) {
+    await updateDoc(doc(db, "tasks", id), { done: !current });
+  };
+
+  window.deleteTask = async function(id) {
+    await deleteDoc(doc(db, "tasks", id));
+  };
+
+  window.drag = function(event, id) {
+    draggedId = id;
+    event.dataTransfer.effectAllowed = 'move';
+  };
+
+  window.drop = async function(event, quadrant) {
+    event.preventDefault();
+    document.querySelectorAll('.quadrant').forEach(q => q.classList.remove('drag-over'));
+    if (!draggedId) return;
+    await updateDoc(doc(db, "tasks", draggedId), { quadrant });
+    draggedId = null;
+  };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('taskInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') window.addTask();
+    });
+
+    // Écoute en temps réel Firestore
+    onSnapshot(tasksCol, (snapshot) => {
+      const tasks = [];
+      snapshot.forEach(d => tasks.push({ id: d.id, ...d.data() }));
+      render(tasks);
+    });
+  });
+
+  function render(tasks) {
+    const lists = { faire: [], deleguer: [], planifier: [], reporter: [] };
+    tasks.forEach(t => {
+      const q = lists[t.quadrant] ? t.quadrant : 'reporter';
+      lists[q].push(t);
+    });
+
+    for (const [q, items] of Object.entries(lists)) {
+      const el = document.getElementById('list-' + q);
+      const badge = document.getElementById('count-' + q);
+      badge.textContent = items.filter(t => !t.done).length;
+
+      if (items.length === 0) {
+        el.innerHTML = '<div class="empty-state">Aucune tâche ici</div>';
+        continue;
+      }
+
+      el.innerHTML = '';
+      items.sort((a,b) => (a.createdAt||0) - (b.createdAt||0)).forEach(t => {
+        const card = document.createElement('div');
+        card.className = 'task-card';
+        card.draggable = true;
+        card.ondragstart = e => window.drag(e, t.id);
+        card.ondragend = () => document.querySelectorAll('.quadrant').forEach(q => q.classList.remove('drag-over'));
+
+        const check = document.createElement('div');
+        check.className = 'task-check' + (t.done ? ' done' : '');
+        check.onclick = () => window.toggleDone(t.id, t.done);
+
+        const text = document.createElement('div');
+        text.className = 'task-text' + (t.done ? ' done' : '');
+        text.textContent = t.text;
+
+        const del = document.createElement('button');
+        del.className = 'task-delete';
+        del.textContent = '×';
+        del.title = 'Supprimer';
+        del.onclick = e => { e.stopPropagation(); window.deleteTask(t.id); };
+
+        card.append(check, text, del);
+        el.appendChild(card);
+      });
+    }
+
+    // Indicateur de connexion
+    document.getElementById('sync-status').textContent = '🟢 Synchronisé';
+  }
+</script>
+
 <style>
   :root {
     --faire: #e8544a;
@@ -35,20 +175,23 @@
 
   header {
     text-align: center;
-    margin-bottom: 32px;
+    margin-bottom: 8px;
   }
 
   header h1 {
     font-family: 'DM Serif Display', serif;
     font-size: 2rem;
     letter-spacing: -0.5px;
-    color: var(--text);
   }
 
-  header p {
+  header p { color: var(--text-muted); font-size: 0.9rem; margin-top: 6px; }
+
+  #sync-status {
+    display: inline-block;
+    font-size: 0.78rem;
     color: var(--text-muted);
-    font-size: 0.9rem;
     margin-top: 6px;
+    margin-bottom: 16px;
   }
 
   .add-task-bar {
@@ -77,17 +220,7 @@
 
   .add-task-bar input::placeholder { color: var(--text-muted); }
 
-  .toggle-group {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-
-  .toggle-label {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    white-space: nowrap;
-  }
+  .toggle-label { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
 
   .toggle-btn {
     border: 1.5px solid var(--border);
@@ -102,19 +235,8 @@
     white-space: nowrap;
   }
 
-  .toggle-btn.active-urgent {
-    background: var(--faire);
-    border-color: var(--faire);
-    color: white;
-    font-weight: 600;
-  }
-
-  .toggle-btn.active-important {
-    background: var(--planifier);
-    border-color: var(--planifier);
-    color: white;
-    font-weight: 600;
-  }
+  .toggle-btn.active-urgent { background: var(--faire); border-color: var(--faire); color: white; font-weight: 600; }
+  .toggle-btn.active-important { background: var(--planifier); border-color: var(--planifier); color: white; font-weight: 600; }
 
   .add-btn {
     background: var(--text);
@@ -135,7 +257,6 @@
   .matrix {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
     gap: 16px;
     position: relative;
   }
@@ -176,93 +297,36 @@
     gap: 10px;
   }
 
-  .quadrant.drag-over {
-    border-color: currentColor;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.1);
-  }
+  .quadrant.drag-over { border-color: currentColor; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }
 
-  .quadrant-header {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    margin-bottom: 4px;
-  }
+  .quadrant-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
 
   .quadrant-icon {
-    width: 36px;
-    height: 36px;
+    width: 36px; height: 36px;
     border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.1rem;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; flex-shrink: 0;
   }
 
-  .quadrant-title-block {}
-
-  .quadrant-name {
-    font-family: 'DM Serif Display', serif;
-    font-size: 1.1rem;
-    line-height: 1.2;
-  }
-
-  .quadrant-tag {
-    font-size: 0.72rem;
-    font-weight: 500;
-    letter-spacing: 0.5px;
-    margin-top: 2px;
-    opacity: 0.7;
-  }
+  .quadrant-name { font-family: 'DM Serif Display', serif; font-size: 1.1rem; line-height: 1.2; }
+  .quadrant-tag { font-size: 0.72rem; font-weight: 500; letter-spacing: 0.5px; margin-top: 2px; opacity: 0.7; }
 
   .quadrant-hint {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    line-height: 1.4;
-    padding: 8px 12px;
-    border-radius: 10px;
-    background: var(--bg);
-    margin-bottom: 4px;
+    font-size: 0.75rem; color: var(--text-muted); line-height: 1.4;
+    padding: 8px 12px; border-radius: 10px; background: var(--bg); margin-bottom: 4px;
   }
+  .quadrant-hint em { font-style: italic; }
 
-  .quadrant-hint em {
-    font-style: italic;
-  }
-
-  /* Faire - Urgent + Important */
-  .q-faire {
-    color: var(--faire);
-    background: linear-gradient(145deg, #fff 60%, var(--faire-light));
-  }
+  .q-faire { color: var(--faire); background: linear-gradient(145deg, #fff 60%, var(--faire-light)); }
   .q-faire .quadrant-icon { background: var(--faire-light); }
-
-  /* Déléguer - Urgent + Pas important */
-  .q-deleguer {
-    color: var(--deleguer);
-    background: linear-gradient(145deg, #fff 60%, var(--deleguer-light));
-  }
+  .q-deleguer { color: var(--deleguer); background: linear-gradient(145deg, #fff 60%, var(--deleguer-light)); }
   .q-deleguer .quadrant-icon { background: var(--deleguer-light); }
-
-  /* Planifier - Pas urgent + Important */
-  .q-planifier {
-    color: var(--planifier);
-    background: linear-gradient(145deg, #fff 60%, var(--planifier-light));
-  }
+  .q-planifier { color: var(--planifier); background: linear-gradient(145deg, #fff 60%, var(--planifier-light)); }
   .q-planifier .quadrant-icon { background: var(--planifier-light); }
-
-  /* Reporter - Pas urgent + Pas important */
-  .q-reporter {
-    color: var(--reporter);
-    background: linear-gradient(145deg, #fff 60%, var(--reporter-light));
-  }
+  .q-reporter { color: var(--reporter); background: linear-gradient(145deg, #fff 60%, var(--reporter-light)); }
   .q-reporter .quadrant-icon { background: var(--reporter-light); }
 
-  .tasks-list {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    flex: 1;
-  }
+  .tasks-list { display: flex; flex-direction: column; gap: 7px; flex: 1; }
 
   .task-card {
     background: white;
@@ -284,74 +348,38 @@
 
   .task-card:active { cursor: grabbing; }
   .task-card.dragging { opacity: 0.4; transform: scale(0.97); }
-
-  .task-card:hover {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-    transform: translateY(-1px);
-  }
+  .task-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-1px); }
 
   .task-check {
-    width: 18px;
-    height: 18px;
+    width: 18px; height: 18px;
     border-radius: 50%;
     border: 2px solid var(--border);
-    flex-shrink: 0;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-shrink: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
     transition: all 0.15s;
   }
-
   .task-check:hover { border-color: currentColor; }
   .task-check.done { background: currentColor; border-color: currentColor; }
   .task-check.done::after { content: '✓'; font-size: 0.65rem; color: white; font-weight: 700; }
 
-  .task-text {
-    flex: 1;
-    font-size: 0.88rem;
-    line-height: 1.3;
-    transition: opacity 0.2s, text-decoration 0.2s;
-  }
-
-  .task-text.done {
-    text-decoration: line-through;
-    opacity: 0.45;
-  }
+  .task-text { flex: 1; font-size: 0.88rem; line-height: 1.3; transition: opacity 0.2s; }
+  .task-text.done { text-decoration: line-through; opacity: 0.45; }
 
   .task-delete {
-    opacity: 0;
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 1rem;
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 6px;
-    transition: opacity 0.15s, color 0.15s;
-    line-height: 1;
+    opacity: 0; background: none; border: none;
+    color: var(--text-muted); font-size: 1rem; cursor: pointer;
+    padding: 2px 4px; border-radius: 6px;
+    transition: opacity 0.15s, color 0.15s; line-height: 1;
   }
-
   .task-card:hover .task-delete { opacity: 1; }
   .task-delete:hover { color: #e55; }
 
-  .empty-state {
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 0.82rem;
-    padding: 20px 0;
-    opacity: 0.6;
-  }
+  .empty-state { text-align: center; color: var(--text-muted); font-size: 0.82rem; padding: 20px 0; opacity: 0.6; }
 
   .count-badge {
-    background: currentColor;
-    color: white;
-    border-radius: 20px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    padding: 1px 7px;
-    margin-left: auto;
-    opacity: 0.85;
+    background: currentColor; color: white;
+    border-radius: 20px; font-size: 0.7rem; font-weight: 700;
+    padding: 1px 7px; margin-left: auto; opacity: 0.85;
   }
 
   @media (max-width: 600px) {
@@ -366,6 +394,7 @@
 <header>
   <h1>Matrice de Priorités</h1>
   <p>Glissez vos tâches entre les quadrants · Cochez pour valider</p>
+  <div id="sync-status">⏳ Connexion…</div>
 </header>
 
 <div class="add-task-bar">
@@ -379,9 +408,8 @@
 
 <div style="position:relative; padding-left: 36px;">
   <div class="axis-label-y">URGENT →</div>
-  <div class="matrix" id="matrix">
+  <div class="matrix">
 
-    <!-- Q1: Urgent + Pas important = Déléguer -->
     <div class="quadrant q-deleguer" id="q-deleguer"
          ondragover="event.preventDefault(); this.classList.add('drag-over')"
          ondragleave="this.classList.remove('drag-over')"
@@ -398,7 +426,6 @@
       <div class="tasks-list" id="list-deleguer"></div>
     </div>
 
-    <!-- Q2: Urgent + Important = Faire -->
     <div class="quadrant q-faire" id="q-faire"
          ondragover="event.preventDefault(); this.classList.add('drag-over')"
          ondragleave="this.classList.remove('drag-over')"
@@ -415,7 +442,6 @@
       <div class="tasks-list" id="list-faire"></div>
     </div>
 
-    <!-- Q3: Pas urgent + Pas important = Reporter -->
     <div class="quadrant q-reporter" id="q-reporter"
          ondragover="event.preventDefault(); this.classList.add('drag-over')"
          ondragleave="this.classList.remove('drag-over')"
@@ -431,7 +457,6 @@
       <div class="tasks-list" id="list-reporter"></div>
     </div>
 
-    <!-- Q4: Pas urgent + Important = Planifier -->
     <div class="quadrant q-planifier" id="q-planifier"
          ondragover="event.preventDefault(); this.classList.add('drag-over')"
          ondragleave="this.classList.remove('drag-over')"
@@ -452,126 +477,5 @@
   </div>
 </div>
 
-<script>
-  let urgent = false;
-  let important = false;
-  let draggedId = null;
-
-  let tasks = JSON.parse(localStorage.getItem('priorites-tasks') || '[]');
-
-  function save() {
-    localStorage.setItem('priorites-tasks', JSON.stringify(tasks));
-  }
-
-  function getQuadrant(u, i) {
-    if (u && i)  return 'faire';
-    if (u && !i) return 'deleguer';
-    if (!u && i) return 'planifier';
-    return 'reporter';
-  }
-
-  function toggleUrgent() {
-    urgent = !urgent;
-    const btn = document.getElementById('btnUrgent');
-    btn.textContent = urgent ? 'Oui' : 'Non';
-    btn.className = 'toggle-btn' + (urgent ? ' active-urgent' : '');
-  }
-
-  function toggleImportant() {
-    important = !important;
-    const btn = document.getElementById('btnImportant');
-    btn.textContent = important ? 'Oui' : 'Non';
-    btn.className = 'toggle-btn' + (important ? ' active-important' : '');
-  }
-
-  function addTask() {
-    const input = document.getElementById('taskInput');
-    const text = input.value.trim();
-    if (!text) return;
-    const task = {
-      id: Date.now().toString(),
-      text,
-      quadrant: getQuadrant(urgent, important),
-      done: false
-    };
-    tasks.push(task);
-    save();
-    render();
-    input.value = '';
-    input.focus();
-  }
-
-  document.getElementById('taskInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') addTask();
-  });
-
-  function toggleDone(id) {
-    const t = tasks.find(t => t.id === id);
-    if (t) { t.done = !t.done; save(); render(); }
-  }
-
-  function deleteTask(id) {
-    tasks = tasks.filter(t => t.id !== id);
-    save(); render();
-  }
-
-  function drag(event, id) {
-    draggedId = id;
-    event.dataTransfer.effectAllowed = 'move';
-  }
-
-  function drop(event, quadrant) {
-    event.preventDefault();
-    document.querySelectorAll('.quadrant').forEach(q => q.classList.remove('drag-over'));
-    if (!draggedId) return;
-    const t = tasks.find(t => t.id === draggedId);
-    if (t) { t.quadrant = quadrant; save(); render(); }
-    draggedId = null;
-  }
-
-  function render() {
-    const lists = { faire: [], deleguer: [], planifier: [], reporter: [] };
-    tasks.forEach(t => (lists[t.quadrant] || (lists['reporter'])).push(t));
-
-    for (const [q, items] of Object.entries(lists)) {
-      const el = document.getElementById('list-' + q);
-      const badge = document.getElementById('count-' + q);
-      badge.textContent = items.filter(t => !t.done).length;
-
-      if (items.length === 0) {
-        el.innerHTML = '<div class="empty-state">Aucune tâche ici</div>';
-        continue;
-      }
-
-      el.innerHTML = '';
-      items.forEach(t => {
-        const card = document.createElement('div');
-        card.className = 'task-card' + (t.done ? ' done-card' : '');
-        card.draggable = true;
-        card.ondragstart = e => drag(e, t.id);
-        card.ondragend = () => document.querySelectorAll('.quadrant').forEach(q => q.classList.remove('drag-over'));
-
-        const check = document.createElement('div');
-        check.className = 'task-check' + (t.done ? ' done' : '');
-        check.onclick = () => toggleDone(t.id);
-
-        const text = document.createElement('div');
-        text.className = 'task-text' + (t.done ? ' done' : '');
-        text.textContent = t.text;
-
-        const del = document.createElement('button');
-        del.className = 'task-delete';
-        del.textContent = '×';
-        del.title = 'Supprimer';
-        del.onclick = e => { e.stopPropagation(); deleteTask(t.id); };
-
-        card.append(check, text, del);
-        el.appendChild(card);
-      });
-    }
-  }
-
-  render();
-</script>
 </body>
 </html>
