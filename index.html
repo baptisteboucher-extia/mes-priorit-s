@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Matrice de Priorités — Équipe</title>
+<title>Mes Priorités — Équipe</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <script type="module">
@@ -21,650 +21,448 @@
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
-  const tasksCol = collection(db, "tasks");
+  const tasksCol = collection(db, "tasks3");
 
-  let urgent = false;
-  let important = false;
-  let draggedId = null;
-
-  function getQuadrant(u, i) {
-    if (u && i)  return 'faire';
-    if (u && !i) return 'deleguer';
-    if (!u && i) return 'planifier';
-    return 'reporter';
-  }
-
-  function formatDate(dateStr) {
-    if (!dateStr) return null;
-    const [y, m, d] = dateStr.split('-');
-    return `${d}/${m}/${y}`;
-  }
-
-  function isExpiringSoon(dateStr) {
-    if (!dateStr) return false;
-    const today = new Date(); today.setHours(0,0,0,0);
-    const target = new Date(dateStr); target.setHours(0,0,0,0);
-    const diff = (target - today) / (1000 * 60 * 60 * 24);
-    return diff <= 1 && diff >= 0;
-  }
-
-  function isExpired(dateStr) {
-    if (!dateStr) return false;
-    const today = new Date(); today.setHours(0,0,0,0);
-    const target = new Date(dateStr); target.setHours(0,0,0,0);
-    return target < today;
-  }
-
-  window.toggleUrgent = function() {
-    urgent = !urgent;
-    const btn = document.getElementById('btnUrgent');
-    btn.textContent = urgent ? 'Oui' : 'Non';
-    btn.className = 'toggle-btn' + (urgent ? ' active-urgent' : '');
+  const CATEGORIES = ['Business', 'RH', 'AD', 'Autres'];
+  const PRIO = {
+    haute:   { label: 'Haute',   color: '#e8544a', bg: '#fde8e7' },
+    moyenne: { label: 'Moyenne', color: '#f59e0b', bg: '#fef3c7' },
+    basse:   { label: 'Basse',   color: '#6bbf8e', bg: '#e8f5ee' },
   };
+  const OWNERS = { Baptiste: '#6366f1', Nicolas: '#f59e0b', Antoine: '#10b981' };
 
-  window.toggleImportant = function() {
-    important = !important;
-    const btn = document.getElementById('btnImportant');
-    btn.textContent = important ? 'Oui' : 'Non';
-    btn.className = 'toggle-btn' + (important ? ' active-important' : '');
+  let pendingDeleteId = null;
+
+  function formatDate(d) {
+    if (!d) return null;
+    const [y,m,j] = d.split('-');
+    return `${j}/${m}/${y}`;
+  }
+
+  function dateStatus(d) {
+    if (!d) return null;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const t = new Date(d); t.setHours(0,0,0,0);
+    const diff = (t - today) / 86400000;
+    if (diff < 0)  return 'expired';
+    if (diff <= 1) return 'soon';
+    return 'ok';
+  }
+
+  // ── ADD ──────────────────────────────────────────
+  window.openAdd = function(cat) {
+    document.getElementById('addModal').classList.add('visible');
+    document.getElementById('addForm').reset();
+    document.getElementById('addCat').value = cat || CATEGORIES[0];
   };
+  window.closeAdd = () => document.getElementById('addModal').classList.remove('visible');
 
-  window.addTask = async function() {
-    const input = document.getElementById('taskInput');
-    const text = input.value.trim();
-    const owner = document.getElementById('ownerSelect').value;
-    const deadline = document.getElementById('deadlineInput').value;
-    if (!text) return;
-    input.value = '';
-    document.getElementById('deadlineInput').value = '';
+  window.submitAdd = async function() {
+    const text = document.getElementById('addText').value.trim();
+    if (!text) { document.getElementById('addText').focus(); return; }
     await addDoc(tasksCol, {
       text,
-      quadrant: getQuadrant(urgent, important),
-      done: false,
-      owner: owner || null,
-      deadline: deadline || null,
+      category:  document.getElementById('addCat').value,
+      priority:  document.getElementById('addPrio').value,
+      owner:     document.getElementById('addOwner').value || null,
+      deadline:  document.getElementById('addDeadline').value || null,
+      comment:   document.getElementById('addComment').value.trim() || null,
+      done:      false,
       createdAt: Date.now()
     });
+    closeAdd();
   };
 
-  window.confirmDelete = async function(id, taskText) {
-    showConfirmModal(taskText, async () => {
-      await deleteDoc(doc(db, "tasks", id));
+  // ── EDIT ─────────────────────────────────────────
+  window.openEdit = function(t) {
+    document.getElementById('editModal').classList.add('visible');
+    document.getElementById('editId').value       = t.id;
+    document.getElementById('editText').value     = t.text;
+    document.getElementById('editCat').value      = t.category;
+    document.getElementById('editPrio').value     = t.priority || 'moyenne';
+    document.getElementById('editOwner').value    = t.owner || '';
+    document.getElementById('editDeadline').value = t.deadline || '';
+    document.getElementById('editComment').value  = t.comment || '';
+  };
+  window.closeEdit = () => document.getElementById('editModal').classList.remove('visible');
+
+  window.submitEdit = async function() {
+    const id = document.getElementById('editId').value;
+    await updateDoc(doc(db, "tasks3", id), {
+      text:     document.getElementById('editText').value.trim(),
+      category: document.getElementById('editCat').value,
+      priority: document.getElementById('editPrio').value,
+      owner:    document.getElementById('editOwner').value || null,
+      deadline: document.getElementById('editDeadline').value || null,
+      comment:  document.getElementById('editComment').value.trim() || null,
     });
+    closeEdit();
   };
 
-  window.confirmDone = async function(id, taskText) {
-    showConfirmModal(`Marquer "${taskText}" comme terminée et la supprimer ?`, async () => {
-      await deleteDoc(doc(db, "tasks", id));
-    });
+  // ── DELETE ────────────────────────────────────────
+  window.confirmDelete = function(id, text) {
+    pendingDeleteId = id;
+    document.getElementById('confirmMsg').textContent = `Supprimer "${text}" ?`;
+    document.getElementById('confirmModal').classList.add('visible');
+  };
+  window.cancelDelete = () => { pendingDeleteId = null; document.getElementById('confirmModal').classList.remove('visible'); };
+  window.doDelete = async function() {
+    if (pendingDeleteId) await deleteDoc(doc(db, "tasks3", pendingDeleteId));
+    cancelDelete();
   };
 
-  window.drop = async function(event, quadrant) {
-    event.preventDefault();
-    document.querySelectorAll('.quadrant').forEach(q => q.classList.remove('drag-over'));
-    if (!draggedId) return;
-    await updateDoc(doc(db, "tasks", draggedId), { quadrant });
-    draggedId = null;
+  // ── DONE ─────────────────────────────────────────
+  window.toggleDone = async function(id, current) {
+    await updateDoc(doc(db, "tasks3", id), { done: !current });
   };
 
-  window.drag = function(event, id) {
-    draggedId = id;
-    event.dataTransfer.effectAllowed = 'move';
-  };
-
-  function showConfirmModal(message, onConfirm) {
-    const modal = document.getElementById('confirmModal');
-    document.getElementById('confirmMessage').textContent = message;
-    modal.classList.add('visible');
-    document.getElementById('confirmYes').onclick = async () => {
-      modal.classList.remove('visible');
-      await onConfirm();
-    };
-    document.getElementById('confirmNo').onclick = () => {
-      modal.classList.remove('visible');
-    };
-  }
-
+  // ── RENDER ────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('taskInput').addEventListener('keydown', e => {
-      if (e.key === 'Enter') window.addTask();
-    });
+    document.getElementById('addText').addEventListener('keydown', e => { if (e.key === 'Enter') window.submitAdd(); });
+    document.getElementById('editText').addEventListener('keydown', e => { if (e.key === 'Enter') window.submitEdit(); });
 
-    onSnapshot(tasksCol, (snapshot) => {
+    onSnapshot(tasksCol, snap => {
       const tasks = [];
-      snapshot.forEach(d => tasks.push({ id: d.id, ...d.data() }));
+      snap.forEach(d => tasks.push({ id: d.id, ...d.data() }));
       render(tasks);
+      document.getElementById('sync').textContent = '🟢 Synchronisé';
     });
   });
 
-  const OWNER_COLORS = {
-    'Baptiste': '#6366f1',
-    'Nicolas':  '#f59e0b',
-    'Antoine':  '#10b981',
-  };
-
   function render(tasks) {
-    const lists = { faire: [], deleguer: [], planifier: [], reporter: [] };
-    tasks.forEach(t => {
-      const q = lists[t.quadrant] ? t.quadrant : 'reporter';
-      lists[q].push(t);
-    });
+    CATEGORIES.forEach(cat => {
+      const catTasks = tasks
+        .filter(t => t.category === cat)
+        .sort((a, b) => {
+          const order = { haute: 0, moyenne: 1, basse: 2 };
+          return (order[a.priority] ?? 1) - (order[b.priority] ?? 1) || (a.createdAt || 0) - (b.createdAt || 0);
+        });
 
-    for (const [q, items] of Object.entries(lists)) {
-      const el = document.getElementById('list-' + q);
-      const badge = document.getElementById('count-' + q);
-      badge.textContent = items.length;
+      const list  = document.getElementById(`list-${cat}`);
+      const badge = document.getElementById(`badge-${cat}`);
+      const remaining = catTasks.filter(t => !t.done).length;
+      badge.textContent = remaining || '';
+      badge.style.display = remaining ? 'inline-flex' : 'none';
+      list.innerHTML = '';
 
-      if (items.length === 0) {
-        el.innerHTML = '<div class="empty-state">Aucune tâche ici</div>';
-        continue;
-      }
+      catTasks.forEach(t => {
+        const p  = PRIO[t.priority] || PRIO.moyenne;
+        const ds = dateStatus(t.deadline);
 
-      el.innerHTML = '';
-      items.sort((a,b) => (a.createdAt||0) - (b.createdAt||0)).forEach(t => {
         const card = document.createElement('div');
-        card.className = 'task-card';
-        card.draggable = true;
-        card.ondragstart = e => window.drag(e, t.id);
-        card.ondragend = () => document.querySelectorAll('.quadrant').forEach(q => q.classList.remove('drag-over'));
+        card.className = 'card' + (t.done ? ' done' : '');
 
-        // Checkbox — clic = confirmation suppression
-        const check = document.createElement('div');
-        check.className = 'task-check';
-        check.title = 'Marquer comme terminée';
-        check.onclick = () => window.confirmDone(t.id, t.text);
+        // Priorité dot + texte + actions
+        const top = document.createElement('div');
+        top.className = 'card-top';
+        top.innerHTML = `
+          <span class="prio-dot" style="background:${p.color}" title="${p.label}"></span>
+          <span class="card-text">${t.text}</span>
+          <div class="card-actions">
+            <button class="btn-icon" title="Modifier" onclick='openEdit(${JSON.stringify(t)})'>✏️</button>
+            <button class="btn-icon del" title="Supprimer" onclick="confirmDelete('${t.id}','${t.text.replace(/'/g,"\\'").replace(/"/g,'\\"')}')">×</button>
+          </div>
+        `;
 
-        // Contenu principal
-        const content = document.createElement('div');
-        content.className = 'task-content';
-
-        const textEl = document.createElement('div');
-        textEl.className = 'task-text';
-        textEl.textContent = t.text;
-        content.appendChild(textEl);
-
-        // Ligne meta (owner + deadline)
+        // Meta : owner + deadline
         const meta = document.createElement('div');
-        meta.className = 'task-meta';
-
+        meta.className = 'card-meta';
         if (t.owner) {
-          const ownerEl = document.createElement('span');
-          ownerEl.className = 'task-owner';
-          ownerEl.textContent = t.owner;
-          ownerEl.style.background = (OWNER_COLORS[t.owner] || '#888') + '22';
-          ownerEl.style.color = OWNER_COLORS[t.owner] || '#888';
-          meta.appendChild(ownerEl);
+          const ow = document.createElement('span');
+          ow.className = 'owner';
+          ow.textContent = t.owner;
+          ow.style.cssText = `background:${OWNERS[t.owner] || '#888'}22;color:${OWNERS[t.owner] || '#888'}`;
+          meta.appendChild(ow);
         }
-
         if (t.deadline) {
-          const deadlineEl = document.createElement('span');
-          deadlineEl.className = 'task-deadline';
-          if (isExpired(t.deadline)) {
-            deadlineEl.classList.add('expired');
-            deadlineEl.textContent = '⚠️ ' + formatDate(t.deadline);
-          } else if (isExpiringSoon(t.deadline)) {
-            deadlineEl.classList.add('soon');
-            deadlineEl.textContent = '🔔 ' + formatDate(t.deadline);
-          } else {
-            deadlineEl.textContent = '📅 ' + formatDate(t.deadline);
-          }
-          meta.appendChild(deadlineEl);
+          const dl = document.createElement('span');
+          dl.className = `deadline ${ds}`;
+          const icon = ds === 'expired' ? '⚠️' : ds === 'soon' ? '🔔' : '📅';
+          dl.textContent = `${icon} ${formatDate(t.deadline)}`;
+          meta.appendChild(dl);
         }
 
-        if (t.owner || t.deadline) content.appendChild(meta);
+        // Checkbox done
+        const check = document.createElement('label');
+        check.className = 'check-label';
+        check.innerHTML = `<input type="checkbox" ${t.done ? 'checked' : ''} onchange="toggleDone('${t.id}',${t.done})"> <span>${t.done ? 'Terminée' : 'Marquer comme fait'}</span>`;
 
-        const del = document.createElement('button');
-        del.className = 'task-delete';
-        del.textContent = '×';
-        del.title = 'Supprimer';
-        del.onclick = e => { e.stopPropagation(); window.confirmDelete(t.id, t.text); };
+        meta.appendChild(check);
 
-        card.append(check, content, del);
-        el.appendChild(card);
+        // Comment
+        const comment = t.comment ? document.createElement('div') : null;
+        if (comment) { comment.className = 'card-comment'; comment.textContent = `💬 ${t.comment}`; }
+
+        card.appendChild(top);
+        if (t.owner || t.deadline || true) card.appendChild(meta);
+        if (comment) card.appendChild(comment);
+        list.appendChild(card);
       });
-    }
 
-    document.getElementById('sync-status').textContent = '🟢 Synchronisé';
+      if (catTasks.length === 0) {
+        list.innerHTML = '<p class="empty">Aucune tâche · <button onclick="openAdd(\'' + cat + '\')">+ Ajouter</button></p>';
+      }
+    });
   }
 </script>
 
 <style>
   :root {
-    --faire: #e8544a;
-    --faire-light: #fde8e7;
-    --deleguer: #f4956a;
-    --deleguer-light: #fdf0e8;
-    --planifier: #6bbf8e;
-    --planifier-light: #e8f5ee;
-    --reporter: #a0a0a0;
-    --reporter-light: #f0f0f0;
-    --bg: #faf8f5;
+    --bg: #f5f3ef;
+    --white: #fff;
     --text: #1a1a1a;
-    --text-muted: #888;
-    --border: #e0dbd4;
-    --card-bg: #ffffff;
-    --shadow: 0 2px 12px rgba(0,0,0,0.07);
+    --muted: #999;
+    --border: #e4dfd8;
+    --shadow: 0 2px 12px rgba(0,0,0,0.06);
   }
-
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
-  body {
-    font-family: 'DM Sans', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    padding: 24px;
-  }
-
-  header { text-align: center; margin-bottom: 8px; }
-  header h1 { font-family: 'DM Serif Display', serif; font-size: 2rem; letter-spacing: -0.5px; }
-  header p { color: var(--text-muted); font-size: 0.9rem; margin-top: 6px; }
-
-  #sync-status {
-    display: inline-block;
-    font-size: 0.78rem;
-    color: var(--text-muted);
-    margin-top: 6px;
-    margin-bottom: 16px;
-  }
-
-  .add-task-bar {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 14px 20px;
+  /* ── HEADER ── */
+  .header {
+    background: #1a1a1a;
+    color: #fff;
+    padding: 16px 28px;
     display: flex;
-    gap: 10px;
     align-items: center;
-    margin-bottom: 28px;
-    box-shadow: var(--shadow);
-    flex-wrap: wrap;
+    gap: 12px;
   }
+  .header h1 { font-family: 'DM Serif Display', serif; font-size: 1.4rem; flex: 1; }
+  #sync { font-size: 0.75rem; color: #888; }
 
-  .add-task-bar input[type="text"] {
-    flex: 1;
-    min-width: 160px;
-    border: none;
-    outline: none;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.95rem;
-    background: transparent;
-    color: var(--text);
-  }
-
-  .add-task-bar input::placeholder { color: var(--text-muted); }
-
-  .add-task-bar input[type="date"] {
-    border: 1.5px solid var(--border);
-    border-radius: 8px;
-    padding: 5px 10px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.82rem;
-    color: var(--text);
-    background: var(--bg);
-    outline: none;
-    cursor: pointer;
-  }
-
-  .owner-select {
-    border: 1.5px solid var(--border);
-    border-radius: 8px;
-    padding: 5px 10px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.82rem;
-    color: var(--text);
-    background: var(--bg);
-    outline: none;
-    cursor: pointer;
-  }
-
-  .toggle-label { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
-
-  .toggle-btn {
-    border: 1.5px solid var(--border);
-    border-radius: 8px;
-    padding: 5px 12px;
-    font-size: 0.8rem;
-    font-family: 'DM Sans', sans-serif;
-    cursor: pointer;
-    background: var(--bg);
-    color: var(--text-muted);
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-
-  .toggle-btn.active-urgent { background: var(--faire); border-color: var(--faire); color: white; font-weight: 600; }
-  .toggle-btn.active-important { background: var(--planifier); border-color: var(--planifier); color: white; font-weight: 600; }
-
-  .add-btn {
-    background: var(--text);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    padding: 8px 20px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity 0.15s, transform 0.1s;
-    white-space: nowrap;
-  }
-  .add-btn:hover { opacity: 0.85; transform: translateY(-1px); }
-
-  .matrix {
+  /* ── GRID ── */
+  .grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    position: relative;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+    padding: 24px 28px;
+    max-width: 1400px;
+    margin: 0 auto;
   }
 
-  .axis-label-y {
-    position: absolute;
-    left: -28px;
-    top: 50%;
-    transform: translateY(-50%) rotate(-90deg);
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-
-  .axis-label-x {
-    text-align: center;
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-top: 8px;
-    grid-column: 1 / -1;
-  }
-
-  .quadrant {
-    background: var(--card-bg);
-    border-radius: 20px;
-    padding: 20px;
-    min-height: 240px;
-    border: 2px solid transparent;
+  /* ── COLUMN ── */
+  .col {
+    background: var(--white);
+    border-radius: 18px;
+    padding: 18px;
     box-shadow: var(--shadow);
-    transition: border-color 0.2s, box-shadow 0.2s;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
 
-  .quadrant.drag-over { border-color: currentColor; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }
-
-  .quadrant-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
-  .quadrant-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
-  .quadrant-name { font-family: 'DM Serif Display', serif; font-size: 1.1rem; line-height: 1.2; }
-  .quadrant-tag { font-size: 0.72rem; font-weight: 500; letter-spacing: 0.5px; margin-top: 2px; opacity: 0.7; }
-
-  .quadrant-hint { font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; padding: 8px 12px; border-radius: 10px; background: var(--bg); margin-bottom: 4px; }
-  .quadrant-hint em { font-style: italic; }
-
-  .q-faire { color: var(--faire); background: linear-gradient(145deg, #fff 60%, var(--faire-light)); }
-  .q-faire .quadrant-icon { background: var(--faire-light); }
-  .q-deleguer { color: var(--deleguer); background: linear-gradient(145deg, #fff 60%, var(--deleguer-light)); }
-  .q-deleguer .quadrant-icon { background: var(--deleguer-light); }
-  .q-planifier { color: var(--planifier); background: linear-gradient(145deg, #fff 60%, var(--planifier-light)); }
-  .q-planifier .quadrant-icon { background: var(--planifier-light); }
-  .q-reporter { color: var(--reporter); background: linear-gradient(145deg, #fff 60%, var(--reporter-light)); }
-  .q-reporter .quadrant-icon { background: var(--reporter-light); }
-
-  .tasks-list { display: flex; flex-direction: column; gap: 7px; flex: 1; }
-
-  .task-card {
-    background: white;
-    border: 1.5px solid var(--border);
-    border-radius: 10px;
-    padding: 9px 12px;
+  .col-header {
     display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    cursor: grab;
-    transition: box-shadow 0.15s, transform 0.15s;
-    animation: slideIn 0.2s ease;
-  }
-
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateY(-6px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  .task-card:active { cursor: grabbing; }
-  .task-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-1px); }
-
-  .task-check {
-    width: 18px; height: 18px;
-    border-radius: 50%;
-    border: 2px solid var(--border);
-    flex-shrink: 0;
-    cursor: pointer;
-    margin-top: 2px;
-    transition: all 0.15s;
-  }
-  .task-check:hover { border-color: #6bbf8e; background: #e8f5ee; }
-
-  .task-content { flex: 1; min-width: 0; }
-
-  .task-text { font-size: 0.88rem; line-height: 1.3; }
-
-  .task-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center; }
-
-  .task-owner {
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 20px;
-    white-space: nowrap;
-  }
-
-  .task-deadline {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    white-space: nowrap;
-  }
-
-  .task-deadline.soon { color: #f59e0b; font-weight: 600; }
-  .task-deadline.expired { color: #e55; font-weight: 600; }
-
-  .task-delete {
-    opacity: 0;
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 1rem;
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 6px;
-    transition: opacity 0.15s, color 0.15s;
-    line-height: 1;
-    flex-shrink: 0;
-  }
-  .task-card:hover .task-delete { opacity: 1; }
-  .task-delete:hover { color: #e55; }
-
-  .empty-state { text-align: center; color: var(--text-muted); font-size: 0.82rem; padding: 20px 0; opacity: 0.6; }
-
-  .count-badge { background: currentColor; color: white; border-radius: 20px; font-size: 0.7rem; font-weight: 700; padding: 1px 7px; margin-left: auto; opacity: 0.85; }
-
-  /* MODAL */
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.4);
-    z-index: 1000;
     align-items: center;
-    justify-content: center;
+    gap: 8px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--border);
   }
-  .modal-overlay.visible { display: flex; }
 
-  .modal {
-    background: white;
+  .col-title { font-weight: 700; font-size: 0.95rem; flex: 1; }
+
+  .col-badge {
+    background: #1a1a1a;
+    color: #fff;
     border-radius: 20px;
-    padding: 28px 32px;
-    max-width: 380px;
-    width: 90%;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-    animation: modalIn 0.2s ease;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    min-width: 22px;
+    text-align: center;
   }
 
-  @keyframes modalIn {
-    from { opacity: 0; transform: scale(0.95); }
-    to   { opacity: 1; transform: scale(1); }
-  }
-
-  .modal h3 { font-family: 'DM Serif Display', serif; font-size: 1.2rem; margin-bottom: 12px; }
-  .modal p { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 24px; line-height: 1.4; }
-
-  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
-
-  .btn-cancel {
-    border: 1.5px solid var(--border);
-    background: white;
+  .col-add {
+    background: none;
+    border: 1.5px dashed var(--border);
     border-radius: 10px;
-    padding: 8px 20px;
+    padding: 8px;
+    width: 100%;
     font-family: 'DM Sans', sans-serif;
-    font-size: 0.9rem;
+    font-size: 0.82rem;
+    color: var(--muted);
     cursor: pointer;
-    color: var(--text-muted);
     transition: all 0.15s;
+    text-align: center;
   }
-  .btn-cancel:hover { background: var(--bg); }
+  .col-add:hover { border-color: #1a1a1a; color: #1a1a1a; background: var(--bg); }
 
-  .btn-confirm {
-    background: #e55;
-    color: white;
-    border: none;
-    border-radius: 10px;
-    padding: 8px 20px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.15s;
+  /* ── CARD ── */
+  .card {
+    border: 1.5px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fafaf8;
+    transition: box-shadow 0.15s, transform 0.15s;
+    animation: pop 0.18s ease;
   }
-  .btn-confirm:hover { opacity: 0.85; }
+  @keyframes pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+  .card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.09); transform: translateY(-1px); }
+  .card.done { opacity: 0.5; }
+  .card.done .card-text { text-decoration: line-through; }
 
-  @media (max-width: 600px) {
-    .matrix { grid-template-columns: 1fr; }
-    .axis-label-y { display: none; }
-    body { padding: 16px; }
+  .card-top { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+  .prio-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+  .card-text { flex: 1; font-size: 0.88rem; line-height: 1.4; }
+
+  .card-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; }
+  .card:hover .card-actions { opacity: 1; }
+  .btn-icon { background: none; border: none; cursor: pointer; font-size: 0.85rem; padding: 3px 5px; border-radius: 6px; transition: background 0.1s; }
+  .btn-icon:hover { background: #f0f0f0; }
+  .btn-icon.del { color: var(--muted); font-size: 1.1rem; line-height: 1; }
+  .btn-icon.del:hover { color: #e55; background: #fde8e7; }
+
+  .card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+
+  .owner { font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+  .deadline { font-size: 0.72rem; color: var(--muted); }
+  .deadline.soon { color: #f59e0b; font-weight: 600; }
+  .deadline.expired { color: #e55; font-weight: 600; }
+
+  .check-label { display: flex; align-items: center; gap: 6px; font-size: 0.72rem; color: var(--muted); cursor: pointer; margin-left: auto; user-select: none; }
+  .check-label input { accent-color: #6bbf8e; cursor: pointer; }
+
+  .card-comment { font-size: 0.77rem; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 6px 10px; line-height: 1.4; margin-top: 4px; }
+
+  .empty { font-size: 0.82rem; color: var(--muted); text-align: center; padding: 12px 0; }
+  .empty button { background: none; border: none; color: #6bbf8e; font-weight: 600; cursor: pointer; font-size: 0.82rem; }
+  .empty button:hover { text-decoration: underline; }
+
+  /* ── MODALS ── */
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100; align-items: center; justify-content: center; }
+  .overlay.visible { display: flex; }
+
+  .modal { background: #fff; border-radius: 20px; padding: 28px; width: 90%; max-width: 440px; box-shadow: 0 20px 60px rgba(0,0,0,0.18); animation: modalIn 0.18s ease; max-height: 90vh; overflow-y: auto; }
+  @keyframes modalIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+
+  .modal h3 { font-family: 'DM Serif Display', serif; font-size: 1.25rem; margin-bottom: 20px; }
+
+  .fg { margin-bottom: 14px; }
+  .fg label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+  .fg input, .fg select, .fg textarea {
+    width: 100%; border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; font-family: 'DM Sans', sans-serif; font-size: 0.9rem;
+    color: var(--text); outline: none; background: #fff; transition: border-color 0.15s;
   }
+  .fg input:focus, .fg select:focus, .fg textarea:focus { border-color: #1a1a1a; }
+  .fg textarea { resize: vertical; min-height: 70px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+  .btn-sec { border: 1.5px solid var(--border); background: #fff; border-radius: 10px; padding: 9px 20px; font-family: 'DM Sans', sans-serif; font-size: 0.9rem; cursor: pointer; color: var(--muted); }
+  .btn-sec:hover { background: var(--bg); }
+  .btn-pri { background: #1a1a1a; color: #fff; border: none; border-radius: 10px; padding: 9px 24px; font-family: 'DM Sans', sans-serif; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+  .btn-pri:hover { opacity: 0.85; }
+  .btn-danger { background: #e55; color: #fff; border: none; border-radius: 10px; padding: 9px 24px; font-family: 'DM Sans', sans-serif; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+  .btn-danger:hover { opacity: 0.85; }
+
+  .confirm-text { font-size: 0.95rem; margin-bottom: 20px; line-height: 1.5; color: var(--text); }
+
+  /* ── CAT COLORS ── */
+  .col[data-cat="Business"] .col-title { color: #6366f1; }
+  .col[data-cat="RH"]       .col-title { color: #e8544a; }
+  .col[data-cat="AD"]        .col-title { color: #f59e0b; }
+  .col[data-cat="Autres"]   .col-title { color: #6bbf8e; }
+
+  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px)  { .grid { grid-template-columns: 1fr; padding: 16px; } .row2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
+<div class="header">
+  <h1>Mes Priorités</h1>
+  <span id="sync">⏳ Connexion…</span>
+</div>
+
+<div class="grid">
+  <!-- 4 colonnes générées -->
+</div>
+
+<!-- MODAL AJOUT -->
+<div class="overlay" id="addModal">
+  <div class="modal">
+    <h3>Nouvelle tâche</h3>
+    <div class="fg"><label>Tâche *</label><input type="text" id="addText" placeholder="Décris la tâche…" /></div>
+    <div class="row2">
+      <div class="fg"><label>Catégorie</label>
+        <select id="addCat"><option>Business</option><option>RH</option><option>AD</option><option>Autres</option></select>
+      </div>
+      <div class="fg"><label>Priorité</label>
+        <select id="addPrio"><option value="haute">🔴 Haute</option><option value="moyenne" selected>🟡 Moyenne</option><option value="basse">🟢 Basse</option></select>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="fg"><label>Responsable</label>
+        <select id="addOwner"><option value="">— Aucun —</option><option>Baptiste</option><option>Nicolas</option><option>Antoine</option></select>
+      </div>
+      <div class="fg"><label>Faire avant le</label><input type="date" id="addDeadline" /></div>
+    </div>
+    <div class="fg"><label>Commentaire</label><textarea id="addComment" placeholder="Contexte, note…"></textarea></div>
+    <div id="addForm" style="display:none"></div>
+    <div class="modal-footer">
+      <button class="btn-sec" onclick="closeAdd()">Annuler</button>
+      <button class="btn-pri" onclick="submitAdd()">Ajouter ✓</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL ÉDITION -->
+<div class="overlay" id="editModal">
+  <div class="modal">
+    <h3>Modifier la tâche</h3>
+    <input type="hidden" id="editId" />
+    <div class="fg"><label>Tâche *</label><input type="text" id="editText" /></div>
+    <div class="row2">
+      <div class="fg"><label>Catégorie</label>
+        <select id="editCat"><option>Business</option><option>RH</option><option>AD</option><option>Autres</option></select>
+      </div>
+      <div class="fg"><label>Priorité</label>
+        <select id="editPrio"><option value="haute">🔴 Haute</option><option value="moyenne">🟡 Moyenne</option><option value="basse">🟢 Basse</option></select>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="fg"><label>Responsable</label>
+        <select id="editOwner"><option value="">— Aucun —</option><option>Baptiste</option><option>Nicolas</option><option>Antoine</option></select>
+      </div>
+      <div class="fg"><label>Faire avant le</label><input type="date" id="editDeadline" /></div>
+    </div>
+    <div class="fg"><label>Commentaire</label><textarea id="editComment" placeholder="Contexte, note…"></textarea></div>
+    <div class="modal-footer">
+      <button class="btn-sec" onclick="closeEdit()">Annuler</button>
+      <button class="btn-pri" onclick="submitEdit()">Enregistrer ✓</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL CONFIRMATION -->
-<div class="modal-overlay" id="confirmModal">
+<div class="overlay" id="confirmModal">
   <div class="modal">
     <h3>Confirmation</h3>
-    <p id="confirmMessage"></p>
-    <div class="modal-actions">
-      <button class="btn-cancel" id="confirmNo">Annuler</button>
-      <button class="btn-confirm" id="confirmYes">Supprimer ✓</button>
+    <p class="confirm-text" id="confirmMsg"></p>
+    <div class="modal-footer">
+      <button class="btn-sec" onclick="cancelDelete()">Annuler</button>
+      <button class="btn-danger" onclick="doDelete()">Supprimer</button>
     </div>
   </div>
 </div>
 
-<header>
-  <h1>Matrice de Priorités</h1>
-  <p>Glissez vos tâches entre les quadrants · Cochez pour valider</p>
-  <div id="sync-status">⏳ Connexion…</div>
-</header>
-
-<div class="add-task-bar">
-  <input type="text" id="taskInput" placeholder="Nouvelle tâche…" />
-
-  <select class="owner-select" id="ownerSelect">
-    <option value="">👤 Responsable</option>
-    <option value="Baptiste">Baptiste</option>
-    <option value="Nicolas">Nicolas</option>
-    <option value="Antoine">Antoine</option>
-  </select>
-
-  <input type="date" id="deadlineInput" title="Faire avant le…" />
-
-  <span class="toggle-label">Urgent ?</span>
-  <button class="toggle-btn" id="btnUrgent" onclick="toggleUrgent()">Non</button>
-  <span class="toggle-label">Important ?</span>
-  <button class="toggle-btn" id="btnImportant" onclick="toggleImportant()">Non</button>
-  <button class="add-btn" onclick="addTask()">+ Ajouter</button>
-</div>
-
-<div style="position:relative; padding-left: 36px;">
-  <div class="axis-label-y">URGENT →</div>
-  <div class="matrix">
-
-    <div class="quadrant q-deleguer" id="q-deleguer"
-         ondragover="event.preventDefault(); this.classList.add('drag-over')"
-         ondragleave="this.classList.remove('drag-over')"
-         ondrop="drop(event, 'deleguer')">
-      <div class="quadrant-header">
-        <div class="quadrant-icon">📤</div>
-        <div class="quadrant-title-block">
-          <div class="quadrant-name">Déléguer / Partager</div>
-          <div class="quadrant-tag">Urgent · Pas important</div>
+<script>
+  // Génère les 4 colonnes
+  const CATS = ['Business', 'RH', 'AD', 'Autres'];
+  const grid = document.querySelector('.grid');
+  CATS.forEach(cat => {
+    grid.innerHTML += `
+      <div class="col" data-cat="${cat}">
+        <div class="col-header">
+          <span class="col-title">${cat}</span>
+          <span class="col-badge" id="badge-${cat}" style="display:none">0</span>
         </div>
-        <span class="count-badge" id="count-deleguer">0</span>
-      </div>
-      <div class="quadrant-hint">J'identifie quelqu'un qui va pouvoir faire avancer le sujet. Je lui <strong>transfère l'info immédiatement</strong>.</div>
-      <div class="tasks-list" id="list-deleguer"></div>
-    </div>
-
-    <div class="quadrant q-faire" id="q-faire"
-         ondragover="event.preventDefault(); this.classList.add('drag-over')"
-         ondragleave="this.classList.remove('drag-over')"
-         ondrop="drop(event, 'faire')">
-      <div class="quadrant-header">
-        <div class="quadrant-icon">⚡</div>
-        <div class="quadrant-title-block">
-          <div class="quadrant-name">Faire</div>
-          <div class="quadrant-tag">Urgent · Important</div>
-        </div>
-        <span class="count-badge" id="count-faire">0</span>
-      </div>
-      <div class="quadrant-hint">Je réalise l'action qui m'incombe si elle met <strong>−5 min</strong> et n'a pas de sœur jumelle. <em>Sinon, je la garde pour ma prochaine plage dispo !</em></div>
-      <div class="tasks-list" id="list-faire"></div>
-    </div>
-
-    <div class="quadrant q-reporter" id="q-reporter"
-         ondragover="event.preventDefault(); this.classList.add('drag-over')"
-         ondragleave="this.classList.remove('drag-over')"
-         ondrop="drop(event, 'reporter')">
-      <div class="quadrant-header">
-        <div class="quadrant-icon">🗑</div>
-        <div class="quadrant-title-block">
-          <div class="quadrant-name">Reporter / Supprimer</div>
-          <div class="quadrant-tag">Pas urgent · Pas important</div>
-        </div>
-        <span class="count-badge" id="count-reporter">0</span>
-      </div>
-      <div class="tasks-list" id="list-reporter"></div>
-    </div>
-
-    <div class="quadrant q-planifier" id="q-planifier"
-         ondragover="event.preventDefault(); this.classList.add('drag-over')"
-         ondragleave="this.classList.remove('drag-over')"
-         ondrop="drop(event, 'planifier')">
-      <div class="quadrant-header">
-        <div class="quadrant-icon">📅</div>
-        <div class="quadrant-title-block">
-          <div class="quadrant-name">Planifier</div>
-          <div class="quadrant-tag">Pas urgent · Important</div>
-        </div>
-        <span class="count-badge" id="count-planifier">0</span>
-      </div>
-      <div class="quadrant-hint">J'évalue l'échéance et la durée. Je prévois immédiatement <strong>un créneau dans mon agenda</strong> pour traiter le sujet.</div>
-      <div class="tasks-list" id="list-planifier"></div>
-    </div>
-
-    <div class="axis-label-x">← IMPORTANT →</div>
-  </div>
-</div>
+        <div id="list-${cat}"></div>
+        <button class="col-add" onclick="openAdd('${cat}')">+ Ajouter une tâche</button>
+      </div>`;
+  });
+</script>
 
 </body>
 </html>
